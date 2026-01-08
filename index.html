@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Reproductor MP3</title>
+<title>Reproductor MP3 Reactivo</title>
 
 <style>
 body {
@@ -54,6 +54,7 @@ button, select, input[type=range] {
   background: #222;
   color: white;
   font-size: 14px;
+  outline: none;
 }
 
 button:hover, select:hover {
@@ -77,30 +78,14 @@ input[type=range]::-webkit-slider-thumb {
   background: #aaa;
 }
 
-/* ECUALIZADOR */
-.eq {
-  display: flex;
-  justify-content: center;
-  gap: 4px;
+/* VISUALIZADOR (CANVAS) */
+#visualizer {
+  width: 100%;
+  height: 60px;
   margin-top: 10px;
-}
-
-.eq div {
-  width: 6px;
-  height: 20px;
-  background: #aaa;
-  animation: eqAnim 1s infinite ease-in-out;
-}
-
-.eq div:nth-child(2) { animation-delay: .1s }
-.eq div:nth-child(3) { animation-delay: .2s }
-.eq div:nth-child(4) { animation-delay: .3s }
-.eq div:nth-child(5) { animation-delay: .4s }
-
-@keyframes eqAnim {
-  0% { height: 10px }
-  50% { height: 30px }
-  100% { height: 10px }
+  display: block;
+  /* Ocultamos el visualizador hasta que haya play */
+  opacity: 0.5; 
 }
 </style>
 </head>
@@ -116,24 +101,21 @@ input[type=range]::-webkit-slider-thumb {
 </div>
 
 <div class="player-box">
-  <button onclick="startPlayer()">Iniciar reproductor</button>
+  <button onclick="initAudioContext()">Iniciar sistema de audio</button>
 
   <select id="songList" onchange="changeSong()">
     <option value="">Selecciona una canción</option>
   </select>
 
-  <!-- BARRA DE PROGRESO -->
   <input type="range" id="progress" value="0" min="0" max="100">
 
   <button onclick="play()">▶ Reproducir</button>
   <button onclick="pause()">⏸ Pausar</button>
 
-  <div class="eq" id="eq" style="display:none">
-    <div></div><div></div><div></div><div></div><div></div>
-  </div>
+  <canvas id="visualizer"></canvas>
 </div>
 
-<audio id="audio"></audio>
+<audio id="audio" crossorigin="anonymous"></audio>
 
 <script>
 const songs = [
@@ -184,36 +166,78 @@ const songs = [
 
 const audio = document.getElementById("audio");
 const list = document.getElementById("songList");
-const eq = document.getElementById("eq");
 const progress = document.getElementById("progress");
+const canvas = document.getElementById("visualizer");
+const canvasCtx = canvas.getContext("2d");
 
+// Variables para el análisis de audio
+let audioContext;
+let analyser;
+let source;
+let isAudioContextSetup = false;
+
+// Llenar lista
 songs.forEach(song=>{
   const opt = document.createElement("option");
-  opt.value = "music/" + song[1];
+  // Asegúrate que la carpeta "music/" exista y tenga los archivos
+  opt.value = "music/" + song[1]; 
   opt.textContent = song[0];
   list.appendChild(opt);
 });
 
-function startPlayer(){
-  alert("Reproductor listo 🔥");
+// Configuración inicial del AudioContext (requiere interacción del usuario)
+function initAudioContext() {
+  if (!isAudioContextSetup) {
+    // Crear contexto
+    audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    analyser = audioContext.createAnalyser();
+    
+    // Conectar el audio tag al analizador
+    source = audioContext.createMediaElementSource(audio);
+    source.connect(analyser);
+    analyser.connect(audioContext.destination);
+    
+    // Configuración para que se vea bonito (pocas barras pero gruesas)
+    analyser.fftSize = 64; 
+    
+    isAudioContextSetup = true;
+    alert("Sistema de audio activado 🔥. Selecciona una canción y dale Play.");
+    
+    // Iniciar loop de dibujo
+    drawVisualizer();
+  } else {
+    // Si ya está activo, reanudar si estaba suspendido
+    if(audioContext.state === 'suspended') {
+      audioContext.resume();
+    }
+  }
 }
 
 function changeSong(){
   audio.src = list.value;
   audio.load();
   progress.value = 0;
+  // Si cambiamos canción, intentamos reproducir
+  if(isAudioContextSetup) play();
 }
 
 function play(){
   if(audio.src){
+    // Asegurar que el contexto esté corriendo
+    if (audioContext && audioContext.state === 'suspended') {
+      audioContext.resume();
+    }
+    // Si el usuario no presionó "Iniciar sistema" primero, lo intentamos aquí
+    if (!isAudioContextSetup) {
+      initAudioContext();
+    }
+    
     audio.play();
-    eq.style.display="flex";
   }
 }
 
 function pause(){
   audio.pause();
-  eq.style.display="none";
 }
 
 /* ACTUALIZAR BARRA */
@@ -229,6 +253,37 @@ progress.addEventListener("input", ()=>{
     audio.currentTime = (progress.value / 100) * audio.duration;
   }
 });
+
+/* LÓGICA DE DIBUJO DEL VISUALIZADOR */
+function drawVisualizer() {
+  requestAnimationFrame(drawVisualizer);
+
+  // Obtener datos de frecuencia
+  const bufferLength = analyser.frequencyBinCount;
+  const dataArray = new Uint8Array(bufferLength);
+  analyser.getByteFrequencyData(dataArray);
+
+  // Limpiar el canvas
+  canvasCtx.clearRect(0, 0, canvas.width, canvas.height);
+
+  // Configuración de dibujo
+  const barWidth = (canvas.width / bufferLength) * 2.5;
+  let barHeight;
+  let x = 0;
+
+  for (let i = 0; i < bufferLength; i++) {
+    barHeight = dataArray[i] / 2; // Ajustar escala de altura
+
+    // Color de las barras (Gris claro)
+    canvasCtx.fillStyle = '#aaa'; 
+    
+    // Dibujar barra
+    // (x, y, ancho, alto) -> y se calcula para que crezca desde abajo
+    canvasCtx.fillRect(x, canvas.height - barHeight, barWidth, barHeight);
+
+    x += barWidth + 2; // Espacio entre barras
+  }
+}
 </script>
 
 </body>
